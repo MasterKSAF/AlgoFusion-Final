@@ -1,0 +1,4 @@
+description: Canonical review markers used in final JSON.
+markers:
+  unresolved_text: проверить поле
+  empty_value: null

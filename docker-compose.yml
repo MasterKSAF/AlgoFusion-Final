@@ -1,0 +1,124 @@
+# docker-compose.yml
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: algofusion-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - app-network
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+    container_name: algofusion-ui
+    ports:
+      - "8501:8501"
+    volumes:
+      - ${HOST_SHARED_FILES_PATH:-./shared/files}:/shared/files:rw
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - SHARED_FILES_PATH=/shared/files
+      - LOG_LEVEL=INFO
+      - PYTHONPATH=/app
+      - PYTHONUTF8=1
+      - PYTHONIOENCODING=utf-8
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501', timeout=5).read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  file-monitor:
+    build:
+      context: .
+      dockerfile: monitor/Dockerfile
+    container_name: algofusion-file-monitor
+    volumes:
+      - ${HOST_SHARED_FILES_PATH:-./shared/files}:/shared/files:rw
+      - ${HOST_INCOMING_PATH:-./Incoming}:/external/incoming:rw
+      - ./monitor:/app/monitor:rw
+      - ./core:/app/core:rw
+      - ./shared:/app/shared:rw
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - SHARED_FILES_PATH=/shared/files
+      - EXTERNAL_MONITOR_PATH=/external/incoming
+      - PIPELINE_MODE=${PIPELINE_MODE:-v2}
+      - PIPELINE_V2_QUEUE=${PIPELINE_V2_QUEUE:-files:pipeline_v2}
+      - LOG_LEVEL=INFO
+      - PYTHONPATH=/app
+      - PYTHONUTF8=1
+      - PYTHONIOENCODING=utf-8
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
+      - CONTAINER_UID=${UID:-1000}
+      - CONTAINER_GID=${GID:-1000}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  worker-pipeline-v2:
+    build:
+      context: .
+      dockerfile: workers/OCR-Sergei/PIPELINE_V2/Dockerfile
+    container_name: algofusion-worker-pipeline-v2
+    volumes:
+      - ${HOST_SHARED_FILES_PATH:-./shared/files}:/shared/files:rw
+      - ocr_model_cache:/root/.cache
+      - ./workers/OCR-Sergei/PIPELINE_V2/src:/app/src:rw
+      - ./shared:/app/shared:rw
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - PIPELINE_V2_QUEUE=${PIPELINE_V2_QUEUE:-files:pipeline_v2}
+      - SHARED_FILES_DIR=/shared/files
+      - LOG_LEVEL=INFO
+      - SERVICE_NAME=pipeline-v2-worker
+      - PYTHONPATH=/app
+      - PYTHONUTF8=1
+      - PYTHONIOENCODING=utf-8
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+    driver: local
+  ocr_model_cache:
+    driver: local
+
+networks:
+  app-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

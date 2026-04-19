@@ -1,0 +1,15 @@
+description: Allowed unit abbreviations used during normalization.
+values:
+  - шт
+  - кг
+  - г
+  - т
+  - л
+  - мл
+  - м
+  - см
+  - уп
+  - упак
+  - пар
+  - рул
+  - комплект

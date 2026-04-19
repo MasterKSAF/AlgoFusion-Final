@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+.env
+.venv/
+ui_env/
+ocr_env/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# PyCharm
+.idea/
+*.iml
+
+# Local pipeline artifacts
+Incoming/
+shared/files/
+
+# Local scratch files
+_tmp*/
+_tmp*.py
+_tmp*.json
+_tmp*.png

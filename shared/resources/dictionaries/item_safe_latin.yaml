@@ -1,0 +1,29 @@
+description: Latin tokens that are acceptable inside product names.
+values:
+  - ALPHA
+  - AMBER
+  - ANTI
+  - AQUA
+  - BLACK
+  - CLAY
+  - COMPLEX
+  - DELUXE
+  - ESTEL
+  - FADEBRUSH
+  - GEL
+  - GOLD
+  - KERATIN
+  - LUXE
+  - MARINE
+  - MATTE
+  - NISHMAN
+  - PRO
+  - SALON
+  - SENSE
+  - SHAVING
+  - SIZE
+  - SPACE
+  - STORM
+  - SUN
+  - VOLCANO
+  - YELLOW

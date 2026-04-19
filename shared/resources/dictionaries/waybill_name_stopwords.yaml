@@ -1,0 +1,17 @@
+description: Common Russian product noise words that should not drive waybill row matching.
+values:
+  - страна
+  - ввоза
+  - происх
+  - происхождения
+  - россия
+  - товар
+  - волос
+  - маска
+  - шампунь
+  - краска
+  - уход
+  - estel
+  - haute
+  - couture
+  - luxury
