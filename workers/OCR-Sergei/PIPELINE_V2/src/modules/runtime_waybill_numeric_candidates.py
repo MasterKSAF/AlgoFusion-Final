@@ -272,6 +272,8 @@ def waybill_extract_total_before_note(line: str) -> float | None:
     match = re.search(r"(\d+[.,]\d{1,2})\s*(?:\||\s+)?\s*цена\s+отпускн", cleaned, flags=re.I)
     if not match:
         return None
+    if not re.search(r"\d{1,2}\s*%", cleaned[: match.start()]):
+        return None
     return extract_first_numeric_token(match.group(1), allow_integer=False)
 
 

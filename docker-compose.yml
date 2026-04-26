@@ -49,6 +49,50 @@ services:
       retries: 3
     restart: unless-stopped
 
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: algofusion-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ${HOST_SHARED_FILES_PATH:-./shared/files}:/shared/files:rw
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - SHARED_FILES_PATH=/shared/files
+      - ALGOFUSION_RUN_ROOT=${ALGOFUSION_RUN_ROOT:-}
+      - PYTHONUTF8=1
+      - PYTHONIOENCODING=utf-8
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5).read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  ui-web:
+    build:
+      context: .
+      dockerfile: ui-web/Dockerfile
+    container_name: algofusion-ui-web
+    ports:
+      - "8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+
   file-monitor:
     build:
       context: .

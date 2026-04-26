@@ -1,5 +1,8 @@
 # Algofusion Pipeline
 
+> New production-style UI note: the React/FastAPI interface lives in `ui-web/` and `api/`.
+> Runbook: `docs/ui-web.md`. The previous Streamlit UI in `ui/` is still kept as a fallback.
+
 ## О проекте
 
 `Algofusion` - это контур автоматической обработки входящих документов. Система принимает PDF и изображения, готовит страницы к OCR, распознает текст, определяет тип документа, собирает структуру, извлекает поля и сохраняет итоговый JSON.

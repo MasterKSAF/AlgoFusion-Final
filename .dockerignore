@@ -19,3 +19,7 @@ core/__pycache__/
 shared/__pycache__/
 ui/__pycache__/
 workers/**/__pycache__/
+
+ui-web/node_modules/
+ui-web/dist/
+ui-web/*.tsbuildinfo

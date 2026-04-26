@@ -46,6 +46,10 @@ def test_waybill_extract_total_before_note_ignores_nonmatching_text() -> None:
     assert waybill_extract_total_before_note("140,00 | цена отпускн") is None
 
 
+def test_waybill_extract_total_before_note_requires_vat_context() -> None:
+    assert waybill_extract_total_before_note("шт 2 60,00 120,00 20% 20,00 140,00 | цена отпускн") == 140
+
+
 def test_waybill_parse_inline_numeric_tail_parses_compact_row_tail() -> None:
     row = waybill_parse_inline_numeric_tail("wr 2 60,00 120,00 20% 20,00 140,00")
 

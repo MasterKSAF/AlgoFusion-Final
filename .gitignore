@@ -35,6 +35,11 @@ ocr_env/
 .mypy_cache/
 .ipynb_checkpoints/
 
+# Frontend local build/dependency artifacts
+ui-web/node_modules/
+ui-web/dist/
+ui-web/*.tsbuildinfo
+
 # PyCharm
 .idea/
 *.iml

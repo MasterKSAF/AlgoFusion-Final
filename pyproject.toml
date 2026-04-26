@@ -31,6 +31,11 @@ ui = [
   "pyarrow>=23,<24",
   "openpyxl>=3.1,<4.0",
 ]
+api = [
+  "fastapi>=0.115,<1.0",
+  "uvicorn[standard]>=0.34,<1.0",
+  "redis>=5,<8",
+]
 dev = [
   "pytest>=8.0,<9.0",
   "ruff>=0.4,<1.0",
