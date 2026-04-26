@@ -3,7 +3,6 @@
 services:
   redis:
     image: redis:7-alpine
-    container_name: algofusion-redis
     ports:
       - "6379:6379"
     volumes:
@@ -22,7 +21,6 @@ services:
     build:
       context: .
       dockerfile: ui/Dockerfile
-    container_name: algofusion-ui
     ports:
       - "8501:8501"
     volumes:
@@ -53,7 +51,6 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
-    container_name: algofusion-api
     ports:
       - "8000:8000"
     volumes:
@@ -83,7 +80,6 @@ services:
     build:
       context: .
       dockerfile: ui-web/Dockerfile
-    container_name: algofusion-ui-web
     ports:
       - "8080:80"
     depends_on:
@@ -97,7 +93,6 @@ services:
     build:
       context: .
       dockerfile: monitor/Dockerfile
-    container_name: algofusion-file-monitor
     volumes:
       - ${HOST_SHARED_FILES_PATH:-./shared/files}:/shared/files:rw
       - ${HOST_INCOMING_PATH:-./Incoming}:/external/incoming:rw
@@ -130,7 +125,6 @@ services:
     build:
       context: .
       dockerfile: workers/OCR-Sergei/PIPELINE_V2/Dockerfile
-    container_name: algofusion-worker-pipeline-v2
     volumes:
       - ${HOST_SHARED_FILES_PATH:-./shared/files}:/shared/files:rw
       - ocr_model_cache:/root/.cache
@@ -163,6 +157,3 @@ volumes:
 networks:
   app-network:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
