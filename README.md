@@ -1,13 +1,29 @@
-# Algofusion Pipeline
+# AlgoFusion 2 Pipeline
 
-> New production-style UI note: the React/FastAPI interface lives in `ui-web/` and `api/`.
-> Runbook: `docs/ui-web.md`. The previous Streamlit UI in `ui/` is still kept as a fallback.
+> Актуальный рабочий контур: `Incoming` -> `file-monitor` -> Redis -> `worker-pipeline-v2` -> `shared/files` -> FastAPI `api` -> React UI `ui-web`.
+> Новый UI открыт на `http://localhost:8080`. Старый Streamlit UI в `ui/` оставлен только как fallback.
 
 ## О проекте
 
 `Algofusion` - это контур автоматической обработки входящих документов. Система принимает PDF и изображения, готовит страницы к OCR, распознает текст, определяет тип документа, собирает структуру, извлекает поля и сохраняет итоговый JSON.
 
 Основная рабочая версия - `pipeline_v2`. Она обрабатывает документ внутри одного worker-контейнера, чтобы не терять контекст между очисткой изображения, OCR, анализом страниц, извлечением полей и финальной нормализацией.
+
+## Что входит в текущий production-контур
+
+- `Incoming` - локальная входящая папка. Если в ней появляется PDF/PNG/JPG/JPEG, документ автоматически попадает в обработку.
+- `file-monitor` - контейнер-наблюдатель. Он ждет, пока файл полностью запишется, копирует оригинал в `shared/files/<document>/original/` и создает задачу.
+- `redis` - очередь задач, статусы и события.
+- `worker-pipeline-v2` - основной OCR/pipeline worker. Он забирает задачу из Redis, запускает `pipeline_v2` и пишет артефакты.
+- `api` - FastAPI-слой над артефактами, review-правками и событиями.
+- `ui-web` - новый React-интерфейс оператора: документы, поля, артефакты, события, ручные правки, светлая/темная тема.
+
+Минимальный пользовательский сценарий:
+
+1. Положить файл в `Incoming`.
+2. Дождаться обработки worker-ом.
+3. Открыть `http://localhost:8080`.
+4. Проверить итоговый JSON, проблемные поля и артефакты во вкладках UI.
 
 Поддерживаемые типы документов:
 
@@ -57,6 +73,12 @@
 - Контейнер `file-monitor`.
 - Следит за входящей папкой, создает задачи и кладет их в Redis.
 
+`api/`
+
+- FastAPI-интерфейс для нового UI.
+- Читает документы, поля, артефакты и события из `shared/files`/Redis.
+- Сохраняет ручные правки оператора в `data/review_overrides/ui_review.json`, не затирая исходный `final_json`.
+
 `workers/OCR-Sergei/PIPELINE_V2/`
 
 - Основной worker обработки документов.
@@ -70,8 +92,15 @@
 
 `ui/`
 
-- Streamlit-интерфейс мониторинга.
-- Показывает журнал событий, статистику, статус Redis и артефакты обработки.
+- Старый Streamlit-интерфейс мониторинга.
+- Оставлен как fallback и для совместимости, но основной рабочий UI теперь находится в `ui-web/`.
+
+`ui-web/`
+
+- Новый React/Vite UI на порту `8080`.
+- Показывает обзор набора, документы, проверку полей, артефакты и события.
+- Для полей показывает русское смысловое название и технический path.
+- Поддерживает светлую/темную тему и подсказки по ключевым действиям.
 
 `scripts/`
 
@@ -218,6 +247,7 @@
 
 - `HOST_INCOMING_PATH` - локальная входящая папка для `file-monitor`.
 - `HOST_SHARED_FILES_PATH` - локальная папка для рабочих артефактов.
+- `ALGOFUSION_RUN_ROOT` - run-root, который читает новый API/UI. Для live-режима удобно задавать `/shared/files`; для benchmark-прогона можно указать конкретную папку вроде `/shared/files/_no_ocr_full_136_...`.
 - `PIPELINE_V2_QUEUE` - Redis-очередь worker-а, по умолчанию `files:pipeline_v2`.
 - `REDIS_HOST`, `REDIS_PORT`, `REDIS_URL` - подключение к Redis.
 - `SHARED_FILES_DIR` - путь к рабочему хранилищу внутри worker-контейнера.
@@ -242,7 +272,55 @@
 
 Сам файл `.env` не должен попадать в git.
 
-## Docker-запуск
+## Docker-запуск полного контура
+
+Перед первым запуском убедиться, что локальные папки существуют:
+
+```powershell
+cd C:\Users\Misha\Documents\GitHub\AlgoFusion2
+New-Item -ItemType Directory -Force Incoming, shared\files | Out-Null
+```
+
+Основной production-like запуск:
+
+```powershell
+docker compose up -d --build redis file-monitor worker-pipeline-v2 api ui-web
+```
+
+Открыть:
+
+- Новый UI: `http://localhost:8080`
+- API health: `http://localhost:8000/api/health`
+- API stats: `http://localhost:8000/api/stats`
+
+Чтобы обработать новый документ:
+
+```powershell
+Copy-Item "C:\path\to\document.pdf" .\Incoming\
+```
+
+После этого:
+
+1. `file-monitor` увидит файл в `Incoming`.
+2. Оригинал появится в `shared/files/<document>/original/`.
+3. Задача уйдет в Redis-очередь `files:pipeline_v2`.
+4. `worker-pipeline-v2` выполнит OCR и runtime pipeline.
+5. Итоговый JSON появится в `shared/files/<document>/data/final_json/`.
+6. UI покажет документ, поля, события и артефакты через API.
+
+Если UI должен показывать именно live-документы верхнего уровня `shared/files`, задайте для API:
+
+```powershell
+$env:ALGOFUSION_RUN_ROOT="/shared/files"
+docker compose up -d --build api ui-web
+```
+
+Если нужно смотреть зафиксированный benchmark-прогон на 136 документов, задайте конкретную папку:
+
+```powershell
+$env:ALGOFUSION_RUN_ROOT="/shared/files/_no_ocr_full_136_20260418_current_rerun4_waybill_fixes"
+docker compose up -d --build api ui-web
+```
 
 ## Перенос на другой ноутбук
 
@@ -272,10 +350,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\export_portable_bundle.ps1
 
 Скрипт создаст zip рядом с папкой репозитория.
 
-Полный контур:
+Полный контур со всеми сервисами:
 
 ```powershell
-docker compose up --build
+docker compose up -d --build redis file-monitor worker-pipeline-v2 api ui-web
 ```
 
 Основные сервисы:
@@ -283,7 +361,9 @@ docker compose up --build
 - `redis` - очередь задач и статусы.
 - `file-monitor` - наблюдение за входящей папкой.
 - `worker-pipeline-v2` - обработка документов.
-- `ui` - мониторинг обработки.
+- `api` - данные для нового UI.
+- `ui-web` - основной React UI на `8080`.
+- `ui` - старый Streamlit fallback на `8501`, запускается только если он нужен отдельно.
 
 Если Docker не может скачать базовый образ из Docker Hub из-за `TLS handshake timeout`, обычно это сетевая проблема Docker Hub/интернета. Повторный запуск часто помогает:
 
@@ -313,22 +393,26 @@ python -m compileall -q workers/OCR-Sergei/PIPELINE_V2/src/modules tests
 
 ```powershell
 python -m pytest -q -p no:cacheprovider
-docker compose up --build -d
+cd ui-web
+npm run build
+cd ..
+docker compose up -d --build redis file-monitor worker-pipeline-v2 api ui-web
 docker compose ps
 ```
 
-Для быстрой регрессии без повторного OCR используется `scripts/run_pipeline_v2_precomputed_smoke.py`. На 12.04.2026 проверены четыре типа документов:
+Ожидаемое состояние:
 
-- invoice: `C:\Users\Misha\Documents\GitHub\Algofusion\shared\files\_final_acceptance_smoke_invoice1_20260412\data\final_json\Invoice 1.json`;
-- payment order: `C:\Users\Misha\Documents\GitHub\Algofusion\shared\files\_final_acceptance_smoke_payment_order_20260412\data\final_json\Payment_order_3-11.json`;
-- account protocol: `C:\Users\Misha\Documents\GitHub\Algofusion\shared\files\_final_acceptance_smoke_account_prot_20260412\data\final_json\Account_prot_3-14.json`;
-- waybill: `C:\Users\Misha\Documents\GitHub\Algofusion\shared\files\_final_acceptance_smoke_waybill22_header_20260412\data\final_json\Waybill_22.json`.
+- `redis` healthy.
+- `worker-pipeline-v2` healthy и слушает `files:pipeline_v2`.
+- `api` healthy на `http://localhost:8000/api/health`.
+- `ui-web` отвечает на `http://localhost:8080`.
 
-Контрольный полный прогон с OCR выполнен на двухсторонней накладной:
+Для быстрой регрессии без повторного OCR используется `scripts/run_pipeline_v2_precomputed_smoke.py` и подготовленные OCR/gold-артефакты. Текущий benchmark-набор для UI и проверки качества:
 
-- входной файл: `C:\Users\Misha\Documents\GitHub\Algofusion\shared\files\Waybill_22\original\Waybill_22.pdf`;
-- итоговый JSON: `C:\Users\Misha\Documents\GitHub\Algofusion\shared\files\_final_acceptance_e2e_waybill22_20260412_docker\data\final_json\Waybill_22.json`;
-- результат проверки: `document_number=0513092`, `items=37`, `document_type=ТОВАРНАЯ НАКЛАДНАЯ`, `date=11 ноября 2024 г.`.
+- run-root: `shared/files/_no_ocr_full_136_20260418_current_rerun4_waybill_fixes`;
+- количество документов: `136`;
+- типы: `waybill`, `invoice`, `payment_order`, `account_prot`;
+- переносимые внешние артефакты: `C:\Users\Misha\Documents\AlgoFusion2_artifacts_136_20260418`, если папка присутствует на машине.
 
 Если precomputed-набор не содержит `__waybill_header_ocr.json`, номер накладной может остаться `null` в проверке без OCR. В полном OCR-прогоне fallback-кроп формируется заново.
 

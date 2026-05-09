@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
 import { api } from "./api";
 import type {
   ArtifactFile,
@@ -27,8 +27,19 @@ const EMPTY_STATS: Stats = {
   run_root: ""
 };
 
+const TABS: Array<{ id: ViewId; label: string; hint: string }> = [
+  { id: "overview", label: "Обзор", hint: "сводка" },
+  { id: "documents", label: "Документы", hint: "136 файлов" },
+  { id: "review", label: "Проверка", hint: "поля" },
+  { id: "artifacts", label: "Артефакты", hint: "JSON/PDF/PNG" },
+  { id: "events", label: "События", hint: "лог" }
+];
+
+type Theme = "light" | "dark";
+
 function App() {
-  const [view, setView] = useState<ViewId>("monitoring");
+  const [view, setViewState] = useState<ViewId>(() => viewFromHash());
+  const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem("algofusion-theme") === "dark" ? "dark" : "light"));
   const [stats, setStats] = useState<Stats>(EMPTY_STATS);
   const [documents, setDocuments] = useState<DocumentCard[]>([]);
   const [events, setEvents] = useState<EventItem[]>([]);
@@ -37,10 +48,14 @@ function App() {
   const [selectedDocument, setSelectedDocument] = useState<DocumentDetail | null>(null);
   const [artifactTree, setArtifactTree] = useState<ArtifactTree | null>(null);
   const [selectedArtifact, setSelectedArtifact] = useState<ArtifactFile | null>(null);
-  const [artifactText, setArtifactText] = useState<string>("");
+  const [artifactText, setArtifactText] = useState("");
   const [fieldDraft, setFieldDraft] = useState<Record<string, unknown>>({});
-  const [filter, setFilter] = useState("all");
+  const [query, setQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [stateFilter, setStateFilter] = useState("all");
+  const [onlyProblems, setOnlyProblems] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function loadDashboard() {
@@ -55,9 +70,7 @@ function App() {
       setDocuments(docsData.documents);
       setEvents(eventsData.events);
       setQueue(queueData);
-      if (!selectedId && docsData.documents.length) {
-        setSelectedId(docsData.documents[0].id);
-      }
+      setSelectedId((current) => current ?? docsData.documents[0]?.id ?? null);
       setError(null);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -74,6 +87,7 @@ function App() {
       setSelectedArtifact(null);
       setArtifactText("");
       setFieldDraft(detail.review_draft?.fields ?? {});
+      setError(null);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     }
@@ -94,19 +108,37 @@ function App() {
   }
 
   async function saveReviewDraft() {
-    if (!selectedId || Object.keys(fieldDraft).length === 0) {
+    if (!selectedId) {
       return;
     }
-    await api.saveReview(selectedId, fieldDraft);
-    await loadDocument(selectedId);
-    await loadDashboard();
+    setSaving(true);
+    try {
+      await api.saveReview(selectedId, fieldDraft);
+      await loadDocument(selectedId);
+      await loadDashboard();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setSaving(false);
+    }
   }
 
   useEffect(() => {
     void loadDashboard();
-    const handle = window.setInterval(() => void loadDashboard(), 15_000);
+    const handle = window.setInterval(() => void loadDashboard(), 20_000);
     return () => window.clearInterval(handle);
   }, []);
+
+  useEffect(() => {
+    const onHashChange = () => setViewState(viewFromHash());
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("algofusion-theme", theme);
+  }, [theme]);
 
   useEffect(() => {
     if (selectedId) {
@@ -115,40 +147,43 @@ function App() {
   }, [selectedId]);
 
   const visibleDocuments = documents.filter((doc) => {
-    if (filter === "all") {
-      return true;
-    }
-    if (filter === "attention") {
-      return !doc.ready_to_export;
-    }
-    return doc.document_type === filter || doc.status === filter;
+    const text = `${doc.filename} ${doc.document_type} ${doc.status}`.toLowerCase();
+    const matchesQuery = !query.trim() || text.includes(query.trim().toLowerCase());
+    const matchesType = typeFilter === "all" || doc.document_type === typeFilter;
+    const matchesState =
+      stateFilter === "all" ||
+      doc.status === stateFilter ||
+      (stateFilter === "attention" && !doc.ready_to_export) ||
+      (stateFilter === "ready" && doc.ready_to_export);
+    return matchesQuery && matchesType && matchesState;
   });
 
+  const docTypes = Object.keys(stats.by_type).sort();
+
   return (
-    <div className="shell">
+    <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">AF</div>
           <div>
-            <strong>Algofusion UI</strong>
-            <span>production console</span>
+            <strong>AlgoFusion 2</strong>
+            <span>Pipeline control room</span>
           </div>
         </div>
-        <nav className="nav">
-          <button className={view === "monitoring" ? "active" : ""} onClick={() => setView("monitoring")}>
-            <span>01</span> Мониторинг
-          </button>
-          <button className={view === "export" ? "active" : ""} onClick={() => setView("export")}>
-            <span>1C</span> Экспорт 1С
-          </button>
-          <button className={view === "developer" ? "active" : ""} onClick={() => setView("developer")}>
-            <span>DV</span> Developer
-          </button>
+
+        <nav className="tab-nav" aria-label="Основные вкладки">
+          {TABS.map((tab) => (
+            <button key={tab.id} className={view === tab.id ? "active" : ""} onClick={() => setView(tab.id)}>
+              <span>{tab.label}</span>
+              <small>{tab.hint}</small>
+            </button>
+          ))}
         </nav>
-        <div className="sidebar-footer">
-          <span>run root</span>
+
+        <div className="run-card">
+          <span>Активный прогон</span>
           <strong title={stats.run_root}>{shortPath(stats.run_root)}</strong>
-          <small>v0.1.0-ui-web</small>
+          <small>{stats.total || 0} документов в индексе</small>
         </div>
       </aside>
 
@@ -156,10 +191,13 @@ function App() {
         <header className="topbar">
           <div>
             <p className="eyebrow">AlgoFusion2 / OCR pipeline v2</p>
-            <h1>{view === "monitoring" ? "Мониторинг" : view === "export" ? "Экспорт 1С" : "Developer Explorer"}</h1>
+            <h1>{tabTitle(view)}</h1>
           </div>
           <div className="topbar-actions">
             {error && <span className="error-pill">{error}</span>}
+            <button className="ghost-button theme-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+              {theme === "dark" ? "Светлая тема" : "Тёмная тема"}
+            </button>
             <button className="ghost-button" onClick={() => void loadDashboard()}>
               Обновить
             </button>
@@ -167,44 +205,72 @@ function App() {
         </header>
 
         {loading ? (
-          <div className="loading-card">Загружаю артефакты пайплайна...</div>
+          <div className="empty-state">Загружаю документы, метрики и артефакты пайплайна...</div>
         ) : (
           <>
-            {view === "monitoring" && (
-              <MonitoringView
+            {view === "overview" && (
+              <OverviewView
                 stats={stats}
-                documents={visibleDocuments}
+                documents={documents}
                 events={events}
-                filter={filter}
-                onFilter={setFilter}
-                selectedId={selectedId}
-                onSelect={setSelectedId}
+                queue={queue}
+                onOpenReview={() => setView("review")}
+                onOpenDocument={(id) => {
+                  setSelectedId(id);
+                  setView("documents");
+                }}
               />
             )}
-            {view === "export" && (
-              <ExportView
+
+            {view === "documents" && (
+              <DocumentsView
                 stats={stats}
-                queue={queue}
+                documents={visibleDocuments}
                 selectedDocument={selectedDocument}
                 selectedId={selectedId}
-                fieldDraft={fieldDraft}
-                onDraft={setFieldDraft}
+                docTypes={docTypes}
+                query={query}
+                typeFilter={typeFilter}
+                stateFilter={stateFilter}
+                onQuery={setQuery}
+                onTypeFilter={setTypeFilter}
+                onStateFilter={setStateFilter}
                 onSelect={setSelectedId}
+                onOpenArtifacts={() => setView("artifacts")}
+              />
+            )}
+
+            {view === "review" && (
+              <ReviewView
+                queue={queue}
+                selectedId={selectedId}
+                selectedDocument={selectedDocument}
+                fieldDraft={fieldDraft}
+                onlyProblems={onlyProblems}
+                saving={saving}
+                onOnlyProblems={setOnlyProblems}
+                onSelect={setSelectedId}
+                onDraft={setFieldDraft}
                 onSave={() => void saveReviewDraft()}
               />
             )}
-            {view === "developer" && (
-              <DeveloperView
-                documents={documents}
+
+            {view === "artifacts" && (
+              <ArtifactsView
+                documents={visibleDocuments.length ? visibleDocuments : documents}
                 selectedId={selectedId}
                 selectedDocument={selectedDocument}
                 artifactTree={artifactTree}
                 selectedArtifact={selectedArtifact}
                 artifactText={artifactText}
+                query={query}
+                onQuery={setQuery}
                 onSelectDocument={setSelectedId}
                 onSelectArtifact={(file) => void openArtifact(file)}
               />
             )}
+
+            {view === "events" && <EventsView events={events} stats={stats} />}
           </>
         )}
       </main>
@@ -212,149 +278,269 @@ function App() {
   );
 }
 
-function MonitoringView(props: {
+function setView(view: ViewId) {
+  window.location.hash = view;
+}
+
+function viewFromHash(): ViewId {
+  const raw = window.location.hash.replace(/^#\/?/, "");
+  return TABS.some((tab) => tab.id === raw) ? (raw as ViewId) : "overview";
+}
+
+function OverviewView(props: {
   stats: Stats;
   documents: DocumentCard[];
   events: EventItem[];
-  filter: string;
-  selectedId: string | null;
-  onFilter: (value: string) => void;
-  onSelect: (id: string) => void;
-}) {
-  return (
-    <section className="page-grid">
-      <div className="metrics-row">
-        <MetricCard label="Всего" value={props.stats.total} tone="neutral" />
-        <MetricCard label="В обработке" value={props.stats.processing} tone="warning" />
-        <MetricCard label="Завершено" value={props.stats.completed} tone="success" />
-        <MetricCard label="Ошибки" value={props.stats.failed} tone="danger" />
-        <MetricCard label="Готово к экспорту" value={props.stats.ready_to_export} tone="info" />
-      </div>
-
-      <section className="panel documents-panel">
-        <div className="panel-head">
-          <div>
-            <h2>Документы</h2>
-            <p>Последние загруженные и пересобранные документы</p>
-          </div>
-          <select value={props.filter} onChange={(event) => props.onFilter(event.target.value)}>
-            <option value="all">Все статусы</option>
-            <option value="attention">Требуют внимания</option>
-            <option value="waybill">Накладные</option>
-            <option value="invoice">Счета</option>
-            <option value="payment_order">Платежки</option>
-            <option value="account_prot">Account prot</option>
-          </select>
-        </div>
-        <DocumentTable documents={props.documents} selectedId={props.selectedId} onSelect={props.onSelect} />
-      </section>
-
-      <EventPanel events={props.events} />
-    </section>
-  );
-}
-
-function ExportView(props: {
-  stats: Stats;
   queue: ExportQueue | null;
-  selectedDocument: DocumentDetail | null;
-  selectedId: string | null;
-  fieldDraft: Record<string, unknown>;
-  onDraft: (value: Record<string, unknown>) => void;
-  onSelect: (id: string) => void;
-  onSave: () => void;
+  onOpenReview: () => void;
+  onOpenDocument: (id: string) => void;
 }) {
-  const attention = props.queue?.requires_attention ?? [];
-  const ready = props.queue?.ready ?? [];
+  const problemDocs = (props.queue?.requires_attention ?? props.documents.filter((doc) => !doc.ready_to_export)).slice(0, 8);
+  const readyRatio = props.stats.total ? Math.round((props.stats.ready_to_export / props.stats.total) * 100) : 0;
+
   return (
-    <section className="export-layout">
-      <div className="metrics-row">
-        <MetricCard label="Готово 100%" value={props.stats.ready_to_export} tone="success" />
-        <MetricCard label="Пустые поля" value={props.stats.null_fields} tone="warning" />
-        <MetricCard label="Проверить поле" value={props.stats.review_fields} tone="danger" />
-        <MetricCard label="Уже собрано" value={props.stats.completed} tone="info" />
+    <section className="view-stack">
+      <div className="metric-grid">
+        <MetricCard label="Всего документов" value={props.stats.total} tone="neutral" />
+        <MetricCard label="Финальный JSON" value={props.stats.completed} tone="success" />
+        <MetricCard label="Готово к экспорту" value={props.stats.ready_to_export} tone="info" />
+        <MetricCard label="Требуют проверки" value={props.stats.requires_attention} tone="warning" />
+        <MetricCard label="Ошибки" value={props.stats.failed} tone="danger" />
       </div>
 
-      <div className="split">
-        <section className="panel queue-panel">
-          <div className="tabs">
-            <span className="active">Требуют внимания ({attention.length})</span>
-            <span>Готовы к экспорту ({ready.length})</span>
+      <div className="overview-grid">
+        <section className="panel hero-panel">
+          <div>
+            <p className="eyebrow">Готовность набора</p>
+            <h2>{readyRatio}% документов без ручной проверки</h2>
+            <p>
+              UI читает актуальный run-root из `shared/files`, показывает итоговые JSON, проблемные поля и артефакты
+              каждого документа.
+            </p>
           </div>
-          <div className="queue-list">
-            {[...attention, ...ready].slice(0, 80).map((doc) => (
-              <button
-                key={doc.id}
-                className={`queue-item ${props.selectedId === doc.id ? "active" : ""}`}
-                onClick={() => props.onSelect(doc.id)}
-              >
-                <strong>{doc.filename}</strong>
-                <div className="queue-badges">
-                  {doc.null_count > 0 && <Badge tone="warning">Null: {doc.null_count}</Badge>}
-                  {doc.review_count > 0 && <Badge tone="danger">Review: {doc.review_count}</Badge>}
-                  {doc.ready_to_export && <Badge tone="success">Ready</Badge>}
-                </div>
-              </button>
+          <div className="donut" style={{ "--value": `${readyRatio}%` } as CSSProperties}>
+            <strong>{readyRatio}%</strong>
+            <span>готово</span>
+          </div>
+        </section>
+
+        <section className="panel type-panel">
+          <PanelTitle title="Типы документов" subtitle="Распределение по текущему прогону" />
+          <div className="type-list">
+            {Object.entries(props.stats.by_type).map(([type, count]) => (
+              <div key={type} className="type-row">
+                <span>{documentTypeLabel(type)}</span>
+                <strong>{count}</strong>
+              </div>
             ))}
           </div>
         </section>
 
-        <FieldEditor
-          document={props.selectedDocument}
-          draft={props.fieldDraft}
-          onDraft={props.onDraft}
-          onSave={props.onSave}
-        />
+        <section className="panel attention-panel">
+          <div className="panel-head">
+            <PanelTitle title="Что проверить первым" subtitle="Документы с null/review/invalid полями" />
+            <button className="ghost-button" onClick={props.onOpenReview}>
+              Открыть проверку
+            </button>
+          </div>
+          <div className="compact-list">
+            {problemDocs.map((doc) => (
+              <button key={doc.id} onClick={() => props.onOpenDocument(doc.id)}>
+                <strong title={doc.filename}>{displayDocumentName(doc.filename)}</strong>
+                <span>{documentTypeLabel(doc.document_type)}</span>
+                <Badge tone={doc.invalid_count ? "danger" : "warning"}>
+                  {doc.null_count + doc.review_count + doc.invalid_count} полей
+                </Badge>
+              </button>
+            ))}
+            {!problemDocs.length && <div className="empty-inline">Нет документов, требующих проверки.</div>}
+          </div>
+        </section>
+
+        <EventPanel events={props.events.slice(0, 8)} compact />
       </div>
     </section>
   );
 }
 
-function DeveloperView(props: {
+function DocumentsView(props: {
+  stats: Stats;
+  documents: DocumentCard[];
+  selectedDocument: DocumentDetail | null;
+  selectedId: string | null;
+  docTypes: string[];
+  query: string;
+  typeFilter: string;
+  stateFilter: string;
+  onQuery: (value: string) => void;
+  onTypeFilter: (value: string) => void;
+  onStateFilter: (value: string) => void;
+  onSelect: (id: string) => void;
+  onOpenArtifacts: () => void;
+}) {
+  return (
+    <section className="documents-layout">
+      <section className="panel">
+        <div className="panel-head filters-head">
+          <PanelTitle
+            title="Документы"
+            subtitle={`${props.documents.length} из ${props.stats.total} в текущем фильтре`}
+            info="Здесь можно быстро найти документ, отфильтровать тип и открыть его итоговый JSON, поля и артефакты."
+          />
+          <div className="filters">
+            <input
+              value={props.query}
+              placeholder="Поиск по имени, типу, статусу"
+              onChange={(event) => props.onQuery(event.target.value)}
+            />
+            <select value={props.typeFilter} onChange={(event) => props.onTypeFilter(event.target.value)}>
+              <option value="all">Все типы</option>
+              {props.docTypes.map((type) => (
+                <option key={type} value={type}>
+                  {documentTypeLabel(type)}
+                </option>
+              ))}
+            </select>
+            <select value={props.stateFilter} onChange={(event) => props.onStateFilter(event.target.value)}>
+              <option value="all">Все статусы</option>
+              <option value="ready">Готовые</option>
+              <option value="attention">Требуют проверки</option>
+              <option value="completed">Завершённые</option>
+              <option value="failed">С ошибкой</option>
+              <option value="processing">В обработке</option>
+            </select>
+          </div>
+        </div>
+        <DocumentTable documents={props.documents} selectedId={props.selectedId} onSelect={props.onSelect} />
+      </section>
+
+      <DocumentSidePanel document={props.selectedDocument} onOpenArtifacts={props.onOpenArtifacts} />
+    </section>
+  );
+}
+
+function ReviewView(props: {
+  queue: ExportQueue | null;
+  selectedId: string | null;
+  selectedDocument: DocumentDetail | null;
+  fieldDraft: Record<string, unknown>;
+  onlyProblems: boolean;
+  saving: boolean;
+  onOnlyProblems: (value: boolean) => void;
+  onSelect: (id: string) => void;
+  onDraft: (value: Record<string, unknown>) => void;
+  onSave: () => void;
+}) {
+  const attention = props.queue?.requires_attention ?? [];
+  const ready = props.queue?.ready ?? [];
+  const queueDocs = [...attention, ...ready];
+
+  return (
+    <section className="review-layout">
+      <section className="panel queue-panel">
+        <div className="panel-head compact">
+          <PanelTitle
+            title="Очередь проверки"
+            subtitle={`${attention.length} требуют внимания, ${ready.length} готовы`}
+            info="Слева документы с проблемными полями. Справа можно внести ручную правку, она сохраняется как отдельный review override."
+          />
+        </div>
+        <div className="queue-list">
+          {queueDocs.map((doc) => (
+            <button
+              key={doc.id}
+              className={`queue-item ${props.selectedId === doc.id ? "active" : ""}`}
+              onClick={() => props.onSelect(doc.id)}
+            >
+              <strong title={doc.filename}>{displayDocumentName(doc.filename)}</strong>
+              <span>{documentTypeLabel(doc.document_type)}</span>
+              <div className="badge-row">
+                {doc.ready_to_export ? <Badge tone="success">готов</Badge> : <Badge tone="warning">проверить</Badge>}
+                {doc.null_count > 0 && <Badge tone="warning">пусто {doc.null_count}</Badge>}
+                {doc.review_count > 0 && <Badge tone="danger">проверка {doc.review_count}</Badge>}
+                {doc.invalid_count > 0 && <Badge tone="danger">ошибка {doc.invalid_count}</Badge>}
+              </div>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <FieldEditor
+        document={props.selectedDocument}
+        draft={props.fieldDraft}
+        onlyProblems={props.onlyProblems}
+        saving={props.saving}
+        onOnlyProblems={props.onOnlyProblems}
+        onDraft={props.onDraft}
+        onSave={props.onSave}
+      />
+    </section>
+  );
+}
+
+function ArtifactsView(props: {
   documents: DocumentCard[];
   selectedId: string | null;
   selectedDocument: DocumentDetail | null;
   artifactTree: ArtifactTree | null;
   selectedArtifact: ArtifactFile | null;
   artifactText: string;
+  query: string;
+  onQuery: (value: string) => void;
   onSelectDocument: (id: string) => void;
   onSelectArtifact: (file: ArtifactFile) => void;
 }) {
+  const artifactQuery = props.query.trim().toLowerCase();
+  const files = (props.artifactTree?.files ?? []).filter(
+    (file) =>
+      !artifactQuery ||
+      file.relative_path.toLowerCase().includes(artifactQuery) ||
+      file.stage.toLowerCase().includes(artifactQuery)
+  );
+
   return (
-    <section className="developer-layout">
-      <section className="panel document-picker">
+    <section className="artifacts-layout">
+      <section className="panel artifact-document-panel">
         <div className="panel-head compact">
-          <h2>Документ</h2>
-          <select value={props.selectedId ?? ""} onChange={(event) => props.onSelectDocument(event.target.value)}>
-            {props.documents.map((doc) => (
-              <option key={doc.id} value={doc.id}>
-                {doc.filename}
-              </option>
-            ))}
-          </select>
+          <PanelTitle
+            title="Документ"
+            subtitle="Выбор источника артефактов"
+            info="Артефакты читаются из папки выбранного документа: final JSON, OCR, изображения страниц, кропы и служебные файлы."
+          />
         </div>
+        <select
+          className="wide-select"
+          value={props.selectedId ?? ""}
+          onChange={(event) => props.onSelectDocument(event.target.value)}
+        >
+          {props.documents.map((doc) => (
+            <option key={doc.id} value={doc.id}>
+              {displayDocumentName(doc.filename)}
+            </option>
+          ))}
+        </select>
         {props.selectedDocument && (
-          <div className="doc-summary">
-            <h3>{props.selectedDocument.filename}</h3>
-            <p>{props.selectedDocument.base_path}</p>
-            <div className="summary-grid">
-              <Badge tone="info">{props.selectedDocument.document_type}</Badge>
+          <div className="doc-card">
+            <strong title={props.selectedDocument.filename}>{displayDocumentName(props.selectedDocument.filename)}</strong>
+            <span>{props.selectedDocument.base_path}</span>
+            <div className="badge-row">
+              <Badge tone="info">{documentTypeLabel(props.selectedDocument.document_type)}</Badge>
               <Badge tone={props.selectedDocument.ready_to_export ? "success" : "warning"}>
-                {props.selectedDocument.ready_to_export ? "ready" : "attention"}
+                {props.selectedDocument.ready_to_export ? "готов" : "проверить"}
               </Badge>
-              <Badge tone="neutral">{props.selectedDocument.field_count} fields</Badge>
+              <Badge tone="neutral">{props.selectedDocument.field_count} полей</Badge>
             </div>
           </div>
         )}
       </section>
 
-      <section className="panel artifact-list">
+      <section className="panel artifact-list-panel">
         <div className="panel-head compact">
-          <h2>Артефакты</h2>
-          <p>{props.artifactTree?.files.length ?? 0} files</p>
+          <PanelTitle title="Файлы" subtitle={`${files.length} артефактов`} />
+          <input value={props.query} placeholder="Фильтр: final_json, ocr, png..." onChange={(event) => props.onQuery(event.target.value)} />
         </div>
         <div className="artifact-table">
-          {props.artifactTree?.files.map((file) => (
+          {files.map((file) => (
             <button
               key={file.relative_path}
               className={props.selectedArtifact?.relative_path === file.relative_path ? "active" : ""}
@@ -365,58 +551,128 @@ function DeveloperView(props: {
               <em>{formatBytes(file.size_bytes)}</em>
             </button>
           ))}
+          {!files.length && <div className="empty-inline">Для выбранного документа артефакты не найдены.</div>}
         </div>
       </section>
 
       <section className="panel preview-panel">
         <div className="panel-head compact">
-          <h2>Preview</h2>
-          <p>{props.selectedArtifact?.relative_path ?? "Выберите артефакт"}</p>
+          <PanelTitle title="Просмотр" subtitle={props.selectedArtifact?.relative_path ?? "Выберите файл"} />
         </div>
-        <ArtifactPreview
-          documentId={props.selectedId}
-          artifact={props.selectedArtifact}
-          artifactText={props.artifactText}
-        />
+        <ArtifactPreview documentId={props.selectedId} artifact={props.selectedArtifact} artifactText={props.artifactText} />
       </section>
     </section>
+  );
+}
+
+function EventsView(props: { events: EventItem[]; stats: Stats }) {
+  return (
+    <section className="events-layout">
+      <div className="metric-grid compact">
+        <MetricCard label="Завершены" value={props.stats.completed} tone="success" />
+        <MetricCard label="В обработке" value={props.stats.processing} tone="warning" />
+        <MetricCard label="Ошибки" value={props.stats.failed} tone="danger" />
+        <MetricCard label="События" value={props.events.length} tone="info" />
+      </div>
+      <EventPanel events={props.events} />
+    </section>
+  );
+}
+
+function DocumentSidePanel(props: { document: DocumentDetail | null; onOpenArtifacts: () => void }) {
+  if (!props.document) {
+    return <aside className="panel side-panel empty-panel">Выберите документ, чтобы увидеть поля и путь к JSON.</aside>;
+  }
+
+  const problemFields = props.document.fields.filter((field) => field.effective_state !== "ok");
+  const previewFields = problemFields.length ? problemFields.slice(0, 12) : props.document.fields.slice(0, 12);
+
+  return (
+    <aside className="panel side-panel">
+      <div className="panel-head compact">
+        <PanelTitle
+          title={displayDocumentName(props.document.filename)}
+          subtitle={props.document.base_path}
+          info="Быстрая карточка выбранного документа: статус, путь к final JSON и первые проблемные поля."
+        />
+      </div>
+      <div className="side-content">
+        <div className="badge-row">
+          <Badge tone="info">{documentTypeLabel(props.document.document_type)}</Badge>
+          <Badge tone={props.document.ready_to_export ? "success" : "warning"}>
+            {props.document.ready_to_export ? "готов" : "проверить"}
+          </Badge>
+          <Badge tone="neutral">{props.document.field_count} полей</Badge>
+        </div>
+        <div className="path-box">{props.document.final_json_path ?? "Final JSON не найден"}</div>
+        <button className="primary-button" onClick={props.onOpenArtifacts}>
+          Открыть артефакты
+        </button>
+        <div className="mini-fields">
+          {previewFields.map((field) => (
+            <div key={field.path}>
+              <span title={field.path}>{fieldDisplayLabel(field)}</span>
+              <strong>{valueToString(field.effective_value ?? field.value) || "пусто"}</strong>
+              <Badge tone={fieldTone(field.effective_state)}>{fieldStateLabel(field.effective_state)}</Badge>
+            </div>
+          ))}
+        </div>
+      </div>
+    </aside>
   );
 }
 
 function FieldEditor(props: {
   document: DocumentDetail | null;
   draft: Record<string, unknown>;
+  onlyProblems: boolean;
+  saving: boolean;
+  onOnlyProblems: (value: boolean) => void;
   onDraft: (value: Record<string, unknown>) => void;
   onSave: () => void;
 }) {
   if (!props.document) {
-    return <section className="panel field-editor empty">Выберите документ для проверки полей.</section>;
+    return <section className="panel field-editor empty-panel">Выберите документ из очереди слева.</section>;
   }
-  const problemFields = props.document.fields.filter((field) => field.state !== "ok" || field.has_draft);
-  const visibleFields = problemFields.length ? problemFields : props.document.fields.slice(0, 80);
+
+  const problemFields = props.document.fields.filter((field) => field.effective_state !== "ok" || field.has_draft);
+  const fields = props.onlyProblems ? problemFields : props.document.fields;
+
   return (
     <section className="panel field-editor">
-      <div className="editor-title">
-        <div>
-          <h2>{props.document.filename}</h2>
-          <p>
-            {props.document.document_type} / {props.document.field_count} fields
-          </p>
+      <div className="panel-head editor-head">
+        <PanelTitle
+          title={displayDocumentName(props.document.filename)}
+          subtitle={`${documentTypeLabel(props.document.document_type)} / ${props.document.field_count} полей`}
+          info="Русская строка показывает смысл поля, технический путь под ней нужен для разработчика и валидатора."
+        />
+        <div className="editor-actions">
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={props.onlyProblems}
+              onChange={(event) => props.onOnlyProblems(event.target.checked)}
+            />
+            только проблемные
+          </label>
+          <button className="primary-button" disabled={props.saving} onClick={props.onSave}>
+            {props.saving ? "Сохраняю..." : "Сохранить ручные правки"}
+          </button>
+          <small className="editor-note">Правки пишутся в review override и не затирают исходный final JSON.</small>
         </div>
-        <button className="primary-button" disabled={Object.keys(props.draft).length === 0} onClick={props.onSave}>
-          Сохранить изменения
-        </button>
       </div>
+
       <div className="fields-table">
         <div className="field-row header">
           <span>Поле</span>
           <span>Текущее значение</span>
-          <span>Новое значение</span>
-          <span>Каталог</span>
+          <span>Правка оператора</span>
+          <span>Статус</span>
         </div>
-        {visibleFields.map((field) => (
+        {fields.map((field) => (
           <FieldRow key={field.path} field={field} draft={props.draft} onDraft={props.onDraft} />
         ))}
+        {!fields.length && <div className="empty-inline">Проблемных полей нет.</div>}
       </div>
     </section>
   );
@@ -427,23 +683,24 @@ function FieldRow(props: {
   draft: Record<string, unknown>;
   onDraft: (value: Record<string, unknown>) => void;
 }) {
-  const value = props.draft[props.field.path] ?? props.field.draft_value ?? props.field.value ?? "";
+  const currentDraft = props.draft[props.field.path] ?? props.field.draft_value ?? "";
+
   return (
     <div className={`field-row ${props.field.effective_state}`}>
       <div>
-        <strong>{props.field.label}</strong>
+        <strong>{fieldDisplayLabel(props.field)}</strong>
         <small>{props.field.path}</small>
       </div>
-      <span className="field-current">{valueToString(props.field.value)}</span>
+      <span className="field-current">{valueToString(props.field.value) || "null"}</span>
       <input
-        value={valueToString(value)}
+        value={valueToString(currentDraft)}
+        placeholder={valueToString(props.field.value)}
         onChange={(event) => props.onDraft({ ...props.draft, [props.field.path]: event.target.value })}
       />
-      <span>
-        {props.field.has_draft && <Badge tone="success">draft</Badge>}
-        {!props.field.has_draft && props.field.catalog ? <Badge tone="info">{props.field.catalog}</Badge> : null}
-        {!props.field.has_draft && !props.field.catalog ? "-" : null}
-      </span>
+      <div className="badge-row">
+        <Badge tone={fieldTone(props.field.effective_state)}>{fieldStateLabel(props.field.effective_state)}</Badge>
+        {props.field.has_draft && <Badge tone="success">правка</Badge>}
+      </div>
     </div>
   );
 }
@@ -455,56 +712,59 @@ function DocumentTable(props: {
 }) {
   return (
     <div className="document-table">
-      <div className="table-row header">
+      <div className="document-row header">
         <span>Файл</span>
         <span>Тип</span>
         <span>Статус</span>
-        <span>Прогресс</span>
+        <span>Готовность</span>
         <span>Поля</span>
-        <span>Обновлен</span>
+        <span>Обновлён</span>
       </div>
       {props.documents.map((doc) => (
         <button
           key={doc.id}
-          className={`table-row ${props.selectedId === doc.id ? "selected" : ""}`}
+          className={`document-row ${props.selectedId === doc.id ? "selected" : ""}`}
           onClick={() => props.onSelect(doc.id)}
         >
-          <strong>{doc.filename}</strong>
-          <span>{doc.document_type}</span>
-          <Badge tone={statusTone(doc.status)}>{doc.status}</Badge>
+          <strong title={doc.filename}>{displayDocumentName(doc.filename)}</strong>
+          <span>{documentTypeLabel(doc.document_type)}</span>
+          <Badge tone={statusTone(doc.status)}>{statusLabel(doc.status)}</Badge>
           <span className="progress-cell">
-            <i style={{ width: `${doc.progress}%` }} />
+            <i style={{ width: `${Math.max(4, doc.progress)}%` }} />
             {doc.progress}%
           </span>
           <span>
             {doc.field_count}
-            {!doc.ready_to_export && ` / ${doc.null_count + doc.review_count} check`}
+            {!doc.ready_to_export ? ` / проверить ${doc.null_count + doc.review_count + doc.invalid_count}` : ""}
           </span>
           <span>{formatDate(doc.updated_at)}</span>
         </button>
       ))}
+      {!props.documents.length && <div className="empty-inline">Документы по фильтру не найдены.</div>}
     </div>
   );
 }
 
-function EventPanel(props: { events: EventItem[] }) {
+function EventPanel(props: { events: EventItem[]; compact?: boolean }) {
   return (
-    <section className="panel event-panel">
+    <section className={`panel event-panel ${props.compact ? "compact" : ""}`}>
       <div className="panel-head compact">
-        <div>
-          <h2>Логи событий</h2>
-          <p>Последние события системы</p>
-        </div>
+        <PanelTitle
+          title="События"
+          subtitle="Последние сообщения пайплайна и API"
+          info="Короткий технический журнал: статус, сообщение, документ и время. Подробные JSON-артефакты смотрите во вкладке «Артефакты»."
+        />
       </div>
       <div className="event-list">
-        {props.events.slice(0, 60).map((event, index) => (
+        {props.events.map((event, index) => (
           <div key={`${event.timestamp}-${index}`} className="event-item">
-            <Badge tone={eventTone(event)}>{event.level ?? event.status ?? "INFO"}</Badge>
-            <strong>{event.message ?? event.type ?? event.event ?? "event"}</strong>
-            <span>{event.document ?? event.filename ?? ""}</span>
+            <Badge tone={eventTone(event)}>{eventStatusLabel(event)}</Badge>
+            <strong title={event.message ?? event.type ?? event.event ?? "event"}>{eventMessage(event)}</strong>
+            <span title={event.document ?? event.filename ?? ""}>{displayDocumentName(event.document ?? event.filename ?? "")}</span>
             <time>{event.timestamp ? formatDate(event.timestamp) : ""}</time>
           </div>
         ))}
+        {!props.events.length && <div className="empty-inline">Событий пока нет.</div>}
       </div>
     </section>
   );
@@ -516,11 +776,13 @@ function ArtifactPreview(props: {
   artifactText: string;
 }) {
   if (!props.documentId || !props.artifact) {
-    return <div className="empty-preview">Здесь будет preview выбранного файла.</div>;
+    return <div className="empty-state">Выберите JSON, PNG, PDF или TXT из списка слева.</div>;
   }
+
   if (props.artifact.preview_type === "image") {
     return <img className="image-preview" src={api.artifactUrl(props.documentId, props.artifact.relative_path)} alt="" />;
   }
+
   if (props.artifact.preview_type === "pdf") {
     return (
       <iframe
@@ -530,11 +792,13 @@ function ArtifactPreview(props: {
       />
     );
   }
+
   if (props.artifact.preview_type === "text") {
     return <pre className="text-preview">{props.artifactText || "Загружаю preview..."}</pre>;
   }
+
   return (
-    <a className="primary-button" href={api.artifactUrl(props.documentId, props.artifact.relative_path)} target="_blank">
+    <a className="primary-button download-link" href={api.artifactUrl(props.documentId, props.artifact.relative_path)} target="_blank">
       Открыть файл
     </a>
   );
@@ -549,8 +813,220 @@ function MetricCard(props: { label: string; value: number | string; tone: "neutr
   );
 }
 
+function PanelTitle(props: { title: string; subtitle?: string; info?: string }) {
+  return (
+    <div className="panel-title">
+      <div className="title-line">
+        <h2>{props.title}</h2>
+        {props.info && <InfoDot text={props.info} />}
+      </div>
+      {props.subtitle && <p title={props.subtitle}>{props.subtitle}</p>}
+    </div>
+  );
+}
+
+function InfoDot(props: { text: string }) {
+  return (
+    <span className="info-dot" tabIndex={0} aria-label={props.text}>
+      i
+      <span className="info-tooltip">{props.text}</span>
+    </span>
+  );
+}
+
 function Badge(props: { tone: "neutral" | "success" | "warning" | "danger" | "info"; children: ReactNode }) {
   return <span className={`badge ${props.tone}`}>{props.children}</span>;
+}
+
+function tabTitle(view: ViewId): string {
+  const titleByView: Record<ViewId, string> = {
+    overview: "Рабочий обзор",
+    documents: "Документы",
+    review: "Проверка полей",
+    artifacts: "Артефакты",
+    events: "События"
+  };
+  return titleByView[view];
+}
+
+function documentTypeLabel(type: string): string {
+  const labels: Record<string, string> = {
+    waybill: "Накладная",
+    invoice: "Счёт",
+    payment_order: "Платёжка",
+    account_prot: "Акт/протокол",
+    unknown: "Не определён"
+  };
+  return labels[type] ?? type;
+}
+
+const FIELD_SEGMENT_LABELS: Record<string, string> = {
+  document: "Документ",
+  doc: "Документ",
+  header: "Шапка",
+  footer: "Подвал",
+  totals: "Итоги",
+  total: "Итого",
+  summary: "Итоги",
+  amount: "сумма",
+  total_amount: "итоговая сумма",
+  amount_without_vat: "сумма без НДС",
+  amount_with_vat: "сумма с НДС",
+  vat: "НДС",
+  vat_rate: "ставка НДС",
+  vat_amount: "сумма НДС",
+  vat_total: "итого НДС",
+  vat_total_words: "НДС прописью",
+  nds: "НДС",
+  cost_with_vat: "стоимость с НДС",
+  cost_with_vat_total: "итого с НДС",
+  cost_with_vat_total_words: "итого с НДС прописью",
+  currency: "валюта",
+  number: "номер",
+  no: "номер",
+  date: "дата",
+  document_type: "тип документа",
+  document_series: "серия документа",
+  document_number: "номер документа",
+  contract: "договор",
+  contract_number: "номер договора",
+  contract_date: "дата договора",
+  basis: "основание",
+  invoice: "Счёт",
+  waybill: "Накладная",
+  payment_order: "Платёжное поручение",
+  account_prot: "Акт / протокол",
+  payer: "Плательщик",
+  payee: "Получатель",
+  buyer: "Покупатель",
+  seller: "Поставщик",
+  supplier: "Поставщик",
+  customer: "Заказчик",
+  consignee: "Грузополучатель",
+  consignor: "Грузоотправитель",
+  receiver: "Получатель",
+  sender: "Отправитель",
+  shipper: "Грузоотправитель",
+  organization: "организация",
+  company: "организация",
+  name: "наименование",
+  title: "название",
+  full_name: "полное наименование",
+  tax_id: "УНП",
+  taxpayer_id: "УНП",
+  unp: "УНП",
+  address: "адрес",
+  legal_address: "юридический адрес",
+  bank: "банк",
+  bank_name: "банк",
+  account: "счёт",
+  account_number: "номер счёта",
+  iban: "IBAN",
+  bic: "БИК",
+  bik: "БИК",
+  okpo: "ОКПО",
+  items: "Товары",
+  item: "Товар",
+  goods: "Товары",
+  products: "Товары",
+  rows: "Строки",
+  table: "Таблица",
+  description: "описание",
+  product_name: "наименование товара",
+  quantity: "количество",
+  qty: "количество",
+  quantity_total: "итого количество",
+  unit: "ед. изм.",
+  unit_name: "ед. изм.",
+  price: "цена",
+  unit_price: "цена за единицу",
+  cost: "стоимость",
+  cost_total: "итого стоимость",
+  sum: "сумма",
+  line_number: "номер строки",
+  country: "страна",
+  origin_country: "страна происхождения",
+  tnved: "ТН ВЭД",
+  barcode: "штрихкод",
+  pack: "упаковка",
+  places: "мест",
+  weight: "вес",
+  gross_weight: "вес брутто",
+  net_weight: "вес нетто",
+  received_by: "получил",
+  released_by: "отпустил",
+  handed_by: "сдал",
+  accepted_for_delivery: "принял к перевозке",
+  documents_transferred: "документы переданы",
+  approved_by: "утвердил",
+  approvals: "Подписи и ответственные",
+  signature: "подпись",
+  signer: "подписант",
+  position: "должность",
+  comment: "комментарий",
+  note: "примечание",
+  warning: "предупреждение",
+  confidence: "уверенность",
+  source: "источник"
+};
+
+function fieldDisplayLabel(field: FieldValue): string {
+  const rawPath = field.path || field.label;
+  const segments = rawPath
+    .replace(/\[(\d+)\]/g, ".$1")
+    .split(/[./]/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  if (!segments.length) {
+    return humanizeSegment(field.label || rawPath);
+  }
+
+  const labels: string[] = [];
+  for (const segment of segments) {
+    if (/^\d+$/.test(segment)) {
+      const index = Number(segment) + 1;
+      const previous = labels.at(-1);
+      if (previous === "Товары" || previous === "Строки" || previous === "Таблица") {
+        labels[labels.length - 1] = `Товар ${index}`;
+      } else {
+        labels.push(`№ ${index}`);
+      }
+      continue;
+    }
+    labels.push(FIELD_SEGMENT_LABELS[segment.toLowerCase()] ?? humanizeSegment(segment));
+  }
+
+  return labels.join(" / ");
+}
+
+function humanizeSegment(segment: string): string {
+  return segment
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+    .trim();
+}
+
+function statusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    uploaded: "загружен",
+    processing: "в работе",
+    completed: "готов",
+    exported: "экспорт",
+    failed: "ошибка"
+  };
+  return labels[status] ?? status;
+}
+
+function fieldStateLabel(state: string): string {
+  const labels: Record<string, string> = {
+    ok: "ок",
+    null: "пусто",
+    empty: "пусто",
+    review: "проверить",
+    invalid: "ошибка"
+  };
+  return labels[state] ?? state;
 }
 
 function statusTone(status: string): "neutral" | "success" | "warning" | "danger" | "info" {
@@ -566,6 +1042,19 @@ function statusTone(status: string): "neutral" | "success" | "warning" | "danger
   return "info";
 }
 
+function fieldTone(state: string): "neutral" | "success" | "warning" | "danger" | "info" {
+  if (state === "ok") {
+    return "success";
+  }
+  if (state === "null" || state === "empty") {
+    return "warning";
+  }
+  if (state === "review" || state === "invalid") {
+    return "danger";
+  }
+  return "neutral";
+}
+
 function eventTone(event: EventItem): "neutral" | "success" | "warning" | "danger" | "info" {
   const value = String(event.level ?? event.status ?? "").toLowerCase();
   if (value.includes("error") || value.includes("failed")) {
@@ -578,6 +1067,32 @@ function eventTone(event: EventItem): "neutral" | "success" | "warning" | "dange
     return "success";
   }
   return "info";
+}
+
+function eventStatusLabel(event: EventItem): string {
+  const value = String(event.level ?? event.status ?? "info").toLowerCase();
+  if (value.includes("error") || value.includes("failed")) {
+    return "ошибка";
+  }
+  if (value.includes("warn")) {
+    return "важно";
+  }
+  if (value.includes("ok") || value.includes("success") || value.includes("completed")) {
+    return "ок";
+  }
+  return "инфо";
+}
+
+function eventMessage(event: EventItem): string {
+  return event.message ?? event.type ?? event.event ?? "событие";
+}
+
+function displayDocumentName(path: string): string {
+  if (!path) {
+    return "";
+  }
+  const normalized = path.replaceAll("\\", "/");
+  return normalized.split("/").filter(Boolean).at(-1) ?? path;
 }
 
 function valueToString(value: unknown): string {
@@ -618,7 +1133,7 @@ function formatBytes(value: number): string {
 
 function shortPath(path: string): string {
   if (!path) {
-    return "not detected";
+    return "run-root не найден";
   }
   const normalized = path.replaceAll("\\", "/");
   const parts = normalized.split("/");

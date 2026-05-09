@@ -1,13 +1,35 @@
-# Algofusion UI Web
+# AlgoFusion 2 UI
 
-Новый production-style интерфейс лежит в `ui-web/` и работает через HTTP API из `api/`.
-Старый Streamlit UI в `ui/` пока оставлен как fallback.
+`ui-web/` - рабочий React/Vite интерфейс для текущего пайплайна AlgoFusion 2. Он не запускает OCR сам по себе, а показывает состояние актуального run-root из `shared/files`, итоговые JSON, проблемные поля, ручные review-правки и артефакты документов через FastAPI API из `api/`.
 
 ## Что входит
 
-- `api/` - FastAPI-адаптер над `shared/files` и Redis events.
-- `ui-web/` - React/Vite интерфейс в стиле операционной панели из демо.
-- `docker-compose.yml` - добавлены сервисы `api` на порту `8000` и `ui-web` на порту `8080`.
+- `api/` - FastAPI-адаптер над `shared/files` и событиями Redis.
+- `ui-web/` - вкладочный интерфейс оператора и разработчика с русскими смысловыми подписями полей, техническими путями, подсказками и светлой/тёмной темой.
+- `docker-compose.yml` - сервисы `api` на `8000` и `ui-web` на `8080`.
+
+## Вкладки
+
+- `Обзор` - общие метрики, готовность набора, типы документов, быстрый список проблемных документов.
+- `Документы` - таблица документов с поиском, фильтрами по типу/статусу и карточкой выбранного документа.
+- `Проверка` - очередь документов, поля `null`/`review`/`invalid`, русское название поля над техническим path и ручные правки в `data/review_overrides/ui_review.json`.
+- `Артефакты` - выбор документа, список JSON/PNG/PDF/TXT артефактов и preview выбранного файла.
+- `События` - компактный технический журнал пайплайна/API и базовые счётчики.
+
+## Поведение UI
+
+- Кнопка `Тёмная тема` / `Светлая тема` переключает тему и сохраняет выбор в `localStorage`.
+- Кружок `i` рядом с ключевыми заголовками показывает короткую подсказку по вкладке или действию.
+- В `Документах` фильтры и правая карточка выбранного документа закреплены при прокрутке.
+- В `Проверке` кнопка `Сохранить ручные правки` сохраняет override отдельно от исходного `final_json`.
+
+Вкладки также открываются напрямую:
+
+- `http://localhost:8080/#overview`
+- `http://localhost:8080/#documents`
+- `http://localhost:8080/#review`
+- `http://localhost:8080/#artifacts`
+- `http://localhost:8080/#events`
 
 ## Локальный запуск
 
@@ -21,7 +43,7 @@ python -m uvicorn api.algofusion_api.main:app --host 127.0.0.1 --port 8000
 
 ```powershell
 cd C:\Users\Misha\Documents\GitHub\AlgoFusion2\ui-web
-npm install
+npm ci
 npm run dev
 ```
 
@@ -34,30 +56,49 @@ npm run dev
 
 ```powershell
 cd C:\Users\Misha\Documents\GitHub\AlgoFusion2
-docker compose up --build api ui-web
+docker compose up --build redis api ui-web
 ```
 
 Открыть:
 
-- Новый UI: `http://localhost:8080`
-- API: `http://localhost:8000/api/health`
+- UI: `http://localhost:8080`
+- API health: `http://localhost:8000/api/health`
+- API stats через UI proxy: `http://localhost:8080/api/stats`
 
 ## Данные
 
-API автоматически выбирает самый полный run-root внутри `shared/files`.
-Для явного выбора можно задать:
+API читает run-root из `shared/files`. Для production/live-режима, когда документы приходят через `Incoming`, удобно показывать верхний уровень `/shared/files`:
 
 ```powershell
-$env:ALGOFUSION_RUN_ROOT="C:\Users\Misha\Documents\GitHub\AlgoFusion2\shared\files\_no_ocr_full_136_20260418_current_rerun4_waybill_fixes"
+$env:ALGOFUSION_RUN_ROOT="/shared/files"
+docker compose up -d --build api ui-web
+```
+
+Для benchmark-прогона можно зафиксировать конкретную папку:
+
+```powershell
+$env:ALGOFUSION_RUN_ROOT="/shared/files/_no_ocr_full_136_20260418_current_rerun4_waybill_fixes"
+docker compose up -d --build api ui-web
 ```
 
 Если `ALGOFUSION_RUN_ROOT` не задан, API ищет папку с максимальным количеством документных директорий и `data/final_json`.
 
-## Экраны
+## Проверка
 
-- `Мониторинг` - общие счетчики, список документов, статусы, прогресс, события.
-- `Экспорт 1С` - очередь документов, проблемные поля `null`/`проверить поле`, черновое сохранение ручных правок.
-- `Developer Explorer` - дерево артефактов, preview JSON/TXT/PNG/PDF.
+```powershell
+cd C:\Users\Misha\Documents\GitHub\AlgoFusion2\ui-web
+npm run build
+```
 
-Черновики правок UI сохраняются отдельно в `data/review_overrides/ui_review.json` и не перезаписывают `data/final_json`.
+Smoke через Docker:
 
+```powershell
+cd C:\Users\Misha\Documents\GitHub\AlgoFusion2
+docker compose up -d --build redis file-monitor worker-pipeline-v2 api ui-web
+```
+
+Ожидаемо:
+
+- `GET http://localhost:8000/api/health` возвращает `ok: true`.
+- `GET http://localhost:8080` возвращает HTML приложения.
+- `GET http://localhost:8080/api/stats` возвращает метрики текущего run-root.

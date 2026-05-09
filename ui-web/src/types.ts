@@ -1,6 +1,6 @@
 export type DocumentStatus = "uploaded" | "processing" | "completed" | "exported" | "failed";
 export type FieldState = "ok" | "null" | "review" | "invalid" | "empty";
-export type ViewId = "monitoring" | "export" | "developer";
+export type ViewId = "overview" | "documents" | "review" | "artifacts" | "events";
 
 export interface Stats {
   total: number;
